@@ -6,16 +6,6 @@ pub fn main() !void {
     _ = try getData(std.heap.page_allocator, "billion_measurements.txt");
 }
 
-fn getMeasumentFileContents(gpa: std.mem.Allocator, fileName: []const u8) ![]const u8 {
-    const inputFile = try std.fs.cwd().openFile(fileName, .{ .mode = .read_only });
-    defer inputFile.close();
-    const stat = try inputFile.stat();
-    const buffer = try gpa.alloc(u8, stat.size);
-
-    _ = try inputFile.readAll(buffer);
-    return buffer;
-}
-
 const Station = struct {
     max: f32,
     min: f32,
@@ -26,16 +16,19 @@ fn sortStationsAlpha(_: @TypeOf(.{}), a: []const u8, b: []const u8) bool {
     return std.mem.order(u8, a, b) == .lt;
 }
 fn getData(gpa: std.mem.Allocator, fileName: []const u8) ![]u8 {
-    const fileContents = try getMeasumentFileContents(gpa, fileName);
-    defer gpa.free(fileContents);
+    const inputFile = try std.fs.cwd().openFile(fileName, .{ .mode = .read_only });
+    defer inputFile.close();
+    var inputFileBuffer: [1024 * 64 * 64]u8 = undefined;
+    var reader = inputFile.reader(&inputFileBuffer);
+    const reader_interface = &reader.interface;
+
     var entries = std.StringHashMap(Station).init(gpa);
     try entries.ensureTotalCapacity(10_000);
     var stationNames: [10_000][]const u8 = undefined;
     var numberOfStations: u16 = 0;
     defer entries.deinit();
 
-    var lines = std.mem.splitScalar(u8, fileContents, '\n');
-    while (lines.next()) |line| {
+    while (reader_interface.takeDelimiterExclusive('\n')) |line| {
         if (line.len == 0) {
             continue;
         }
@@ -44,24 +37,34 @@ fn getData(gpa: std.mem.Allocator, fileName: []const u8) ![]u8 {
             if (char == ';') {
                 station = line[0..index];
                 const temp = try std.fmt.parseFloat(f32, line[index + 1 ..]);
-                const entry = try entries.getOrPut(station);
-                if (entry.found_existing) {
-                    var stationEntry = entry.value_ptr;
+                const entry = entries.getEntry(station);
+                if (entry) |value| {
+                    var stationEntry = value.value_ptr;
                     stationEntry.max = @max(stationEntry.max, temp);
                     stationEntry.min = @min(stationEntry.min, temp);
                     stationEntry.count += 1;
                     stationEntry.sum += temp;
                 } else {
+                    const key = try gpa.dupe(u8, station);
                     const stationEntry = Station{ .sum = temp, .max = temp, .min = temp, .count = 1 };
-                    stationNames[numberOfStations] = station;
+                    stationNames[numberOfStations] = key;
                     numberOfStations += 1;
-                    entry.value_ptr.* = stationEntry;
+                    try entries.put(key, stationEntry);
                 }
             }
         }
+    } else |err| switch (err) {
+        error.EndOfStream => {},
+        else => {
+            std.debug.print("An error has been encoutering reading and processing the file: {any}", .{err});
+        },
     }
-    std.debug.print("we got {d} entries", .{entries.count()});
-    //var iter = entries.iterator();
+
+    defer for (stationNames[0..numberOfStations]) |value| {
+        gpa.free(value);
+    };
+
+    std.debug.print("we got {d} entries\n", .{entries.count()});
     std.mem.sort([]const u8, stationNames[0..numberOfStations], .{}, sortStationsAlpha);
     var builder = try std.ArrayList(u8)
         .initCapacity(gpa, 4000);
@@ -75,19 +78,11 @@ fn getData(gpa: std.mem.Allocator, fileName: []const u8) ![]u8 {
         std.debug.print("{s}={d:0>.1}/{d:0>.1}/{d:0>.1}\n", .{ entry.key_ptr.*, station.min, avg, station.max });
         const formatted_string = try std.fmt.allocPrint(gpa, "{s}={d:.1}/{d:.1}/{d:.1}\n", .{ entry.key_ptr.*, station.min, avg, station.max });
         try builder.appendSlice(gpa, formatted_string);
-        defer gpa.free(formatted_string); 
+        defer gpa.free(formatted_string);
         //stationNames[index] = formatted_string;
     }
     std.debug.print("\ncomplete\n\n", .{});
     return try builder.toOwnedSlice(gpa);
-
-    //return &stationNames;
-
-    //while(iter.next()) |entry| {
-
-    //}
-
-    //return &.{};
 }
 
 test "output matches" {
