@@ -7,13 +7,32 @@ pub fn main() !void {
 }
 
 const Station = struct {
-    max: f32,
-    min: f32,
-    count: f32,
-    sum: f64,
+    max: i16,
+    min: i16,
+    count: u32,
+    sum: i64,
 };
 fn sortStationsAlpha(_: @TypeOf(.{}), a: []const u8, b: []const u8) bool {
     return std.mem.order(u8, a, b) == .lt;
+}
+
+pub fn parseTemp(string: []const u8) i16 {
+    var i = string.len;
+    var value: i64 = 0;
+    var tensPower: u16 = 1;
+
+    while (i > 0) {
+        i -= 1;
+        if (string[i] == '-') {
+            return @truncate(-value);
+        } else if (string[i] == '.') {
+            continue;
+        } else {
+            value += tensPower * (string[i] - '0');
+            tensPower *= 10;
+        }
+    }
+    return @truncate(value);
 }
 fn getData(gpa: std.mem.Allocator, fileName: []const u8) ![]u8 {
     const inputFile = try std.fs.cwd().openFile(fileName, .{ .mode = .read_only });
@@ -36,7 +55,7 @@ fn getData(gpa: std.mem.Allocator, fileName: []const u8) ![]u8 {
         for (line, 0..) |char, index| {
             if (char == ';') {
                 station = line[0..index];
-                const temp = try std.fmt.parseFloat(f32, line[index + 1 ..]);
+                const temp = parseTemp(line[index + 1 ..]);
                 const entry = entries.getEntry(station);
                 if (entry) |value| {
                     var stationEntry = value.value_ptr;
@@ -57,6 +76,7 @@ fn getData(gpa: std.mem.Allocator, fileName: []const u8) ![]u8 {
         error.EndOfStream => {},
         else => {
             std.debug.print("An error has been encoutering reading and processing the file: {any}", .{err});
+            return err;
         },
     }
 
@@ -74,9 +94,11 @@ fn getData(gpa: std.mem.Allocator, fileName: []const u8) ![]u8 {
     for (stationNames[0..numberOfStations]) |stationName| {
         const entry = entries.getEntry(stationName).?;
         const station = entry.value_ptr;
-        const avg: f64 = station.sum / station.count;
-        std.debug.print("{s}={d:0>.1}/{d:0>.1}/{d:0>.1}\n", .{ entry.key_ptr.*, station.min, avg, station.max });
-        const formatted_string = try std.fmt.allocPrint(gpa, "{s}={d:.1}/{d:.1}/{d:.1}\n", .{ entry.key_ptr.*, station.min, avg, station.max });
+        const min: f32 = @as(f32, @floatFromInt(station.min)) / 10.0;
+        const max = @as(f32, @floatFromInt(station.max)) / 10.0;
+        const avg: f64 = @as(f64, @floatFromInt(station.sum)) / 10.0 / @as(f32, @floatFromInt(station.count));
+        std.debug.print("{s}={d:0>.1}/{d:0>.1}/{d:0>.1}\n", .{ entry.key_ptr.*, min, avg, max });
+        const formatted_string = try std.fmt.allocPrint(gpa, "{s}={d:.1}/{d:.1}/{d:.1}\n", .{ entry.key_ptr.*, min, avg, max });
         try builder.appendSlice(gpa, formatted_string);
         defer gpa.free(formatted_string);
         //stationNames[index] = formatted_string;
